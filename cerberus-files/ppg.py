@@ -96,15 +96,20 @@ class PhasicValueModel(PhasicModel):
         self.detach_value_head = detach_value_head
         pi_outsize, self.make_distr = distr_builder(actype)
 
+        # Modify some of this code below
+
         for k in self.enc_keys:
             self.set_encoder(k, enc_fn(obtype))
 
+        # value network setup (uses the same ImpalaCNN backbone as the policy network)
         for k in self.vf_keys:
             lastsize = self.get_encoder(k).codetype.size
             self.set_vhead(k, tu.NormedLinear(lastsize, 1, scale=0.1))
 
         lastsize = self.get_encoder(self.pi_key).codetype.size
+        # policy network's policy head
         self.pi_head = tu.NormedLinear(lastsize, pi_outsize, scale=0.1)
+        # policy network's auxiliary value head
         self.aux_vf_head = tu.NormedLinear(lastsize, 1, scale=0.1)
 
     def compute_aux_loss(self, aux, seg):
@@ -140,18 +145,25 @@ class PhasicValueModel(PhasicModel):
             x_out[k], state_out[k] = self.get_encoder(k)(ob, first, state_in[k])
             x_out[k] = self.reshape_x(x_out[k])
 
+        # pi_x is the Encoded "State" (256x1 vector)
         pi_x = x_out[self.pi_key]
+        # pass Encoded "State" through policy layer to get action vector
         pivec = self.pi_head(pi_x)
+        # convert vector into probability distribution for action
         pd = self.make_distr(pivec)
 
         aux = {}
         for k in self.vf_keys:
+            # if statement here is unused (detach_value_head = False)
             if self.detach_value_head:
                 x_out[k] = x_out[k].detach()
+            # Calculate predicted state value
             aux[k] = self.get_vhead(k)(x_out[k])[..., 0]
         vfvec = aux[self.true_vf_key]
+        # compare policy network's auxiliary value head state value prediction with the value network's prediction of state value
         aux.update({"vpredaux": self.aux_vf_head(pi_x)[..., 0], "vpredtrue": vfvec})
 
+        # return action_distribution, value network's prediction of state value, array of state value predictions, and pass state_out through
         return pd, vfvec, aux, state_out
 
     def initial_state(self, batchsize):
