@@ -76,6 +76,7 @@ class PhasicValueModel(PhasicModel):
         detach_value_head = False
         vf_keys = None
         pi_key = "pi"
+        num_policies = 2
 
         if arch == "shared":
             true_vf_key = "pi"
@@ -88,6 +89,7 @@ class PhasicValueModel(PhasicModel):
             assert False
 
         vf_keys = vf_keys or [true_vf_key]
+        self.num_policies = num_policies
         self.pi_enc = enc_fn(obtype)
         self.pi_key = pi_key
         self.true_vf_key = true_vf_key
@@ -95,6 +97,7 @@ class PhasicValueModel(PhasicModel):
         self.enc_keys = list(set([pi_key] + vf_keys))
         self.detach_value_head = detach_value_head
         pi_outsize, self.make_distr = distr_builder(actype)
+        self.pi_outsize = pi_outsize
 
         # Modify some of this code below
 
@@ -104,13 +107,13 @@ class PhasicValueModel(PhasicModel):
         # value network setup (uses the same ImpalaCNN backbone as the policy network)
         for k in self.vf_keys:
             lastsize = self.get_encoder(k).codetype.size
-            self.set_vhead(k, tu.NormedLinear(lastsize, 1, scale=0.1))
+            self.set_vhead(k, tu.NormedLinear(lastsize, num_policies, scale=0.1))
 
         lastsize = self.get_encoder(self.pi_key).codetype.size
         # policy network's policy head
-        self.pi_head = tu.NormedLinear(lastsize, pi_outsize, scale=0.1)
+        self.pi_head = tu.NormedLinear(lastsize, (pi_outsize * num_policies), scale=0.1)
         # policy network's auxiliary value head
-        self.aux_vf_head = tu.NormedLinear(lastsize, 1, scale=0.1)
+        self.aux_vf_head = tu.NormedLinear(lastsize, num_policies, scale=0.1)
 
     def compute_aux_loss(self, aux, seg):
         vtarg = seg["vtarg"]
@@ -149,6 +152,9 @@ class PhasicValueModel(PhasicModel):
         pi_x = x_out[self.pi_key]
         # pass Encoded "State" through policy layer to get action vector
         pivec = self.pi_head(pi_x)
+        # Basic Action selector method (averaging)
+        pivec = th.reshape(pivec, (self.num_policies, self.pi_outsize))
+        pivec = th.mean(pivec, dim=(pivec.size(dim=0)))
         # convert vector into probability distribution for action
         pd = self.make_distr(pivec)
 
